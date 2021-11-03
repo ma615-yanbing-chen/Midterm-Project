@@ -1,0 +1,469 @@
+---
+title: "MA615 Group6 Midterm Project"
+author: "Violet Chen, Jacob Chen, James He"
+date: "Nov 3, 2020"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+subtitle: PDF
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,out.width="0.9\\linewidth",dev="pdf",fig.align  = 'center')
+pacman::p_load(
+  "ggplot2",
+  "knitr",
+  "arm",
+  "data.table",
+  "foreign",
+  "car",
+  "faraway",
+  "nnet",
+  "reshape2",
+  "VGAM",
+  "rstanarm",
+  "glmx",
+  "magrittr",
+  "dplyr",
+  "tidycensus",
+  "sf",
+  "tigris",
+  "ggmap",
+  "janitor",
+  "tidyverse"
+)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(shiny)
+library(RColorBrewer)
+library(plotly)
+library(GGally)
+library(ggpubr)
+```
+
+## Introduction
+
+	Our group were interested in investigating the effects of pesticides that used on strawberry. In order to tell a comprehensive and interesting story, our group decided to narrow down the topic to study the specific effects of pesticides on bees.
+	
+	The first step was to gather enough background knowledge. From the Agricultural Marketing Resource Center, we knew that California produced 90% of strawberries, followed by 8% from Florida, and then is other states. Based on this fact, we hypothesized that California used most amount of pesticides in US. 
+	
+	Secondly, we searched about the effects of bees on strawberry production and came to the results that bees, as natural pollinators, can increase the fruit size, quality, and quantity, compare to machine or human fertilizers. However, since the habitats of bees ranged from underground to forest to cities, it was extremely hard to come up with a protection and management plan that suitable for all bees. It is also hard to know the exact effects of pesticides on bees.
+	
+	At last, we did some background research on pesticides and found out the fungicides and insecticides are used most on strawberries. Fungicides aim to eliminate fungal diseases and insecticides aim to control or kill insects which may harm the fruit. Both drugs were used in large amount to protect strawberry growth.
+	
+	Based on the information we had, we proposed a question: What's the change of bee-harmed pesticides usage across states and why? 
+	
+	We planed to first wrangle the data to get what we want: we would discard “D”s and NAs in the columns to get the data that is essential for analysis. Then we used the data to form EDA, maps, mouse-over pie graphs, and a revealj presentation. This document records our codes and how we tried to answer the question.
+
+
+
+## Data Wrangle
+
+```{r, echo=FALSE}
+#### Load data
+# setwd("615 Midterm Project")
+strawb<-read.csv("Strawberries.csv")
+head(strawb)
+# setwd("~/Desktop/615-assignment/615 Midterm Project")
+pest<-read.csv("Pesticides.csv")
+head(pest)
+
+Sys.setlocale(category = "LC_CTYPE", locale = "C")
+#### Drop the no-info columns
+
+drop_no_info_cols <- function(df){
+  cnames = colnames(strawb)
+  T = NULL
+  for(i in 1:ncol(df)){T <- c(T, nrow(unique(df[i])))}
+  drop_cols <- cnames[which(T == 1)]
+  return(select(df, !all_of(drop_cols)))
+}
+
+strawb <- drop_no_info_cols(strawb)
+
+#Separate Data.Item into 2 columns
+strawb %<>% separate(col=Data.Item,
+                     into = c("Strawberries", "items", "discription", "units"),
+                     sep = ",",
+                     fill = "right")
+
+#### explore
+# distinct(strawb, Strawberries)
+# 
+# distinct(strawb, items)
+# 
+# distinct(strawb, discription)
+# 
+# distinct(strawb, units)
+
+#Separate Domain into 2 columns(?)
+strawb %<>% separate(col=Domain,
+                     into = c("dname","type"),
+                     sep = ",",
+                     fill = "right")
+# distinct(strawb,dname)
+# distinct(strawb,type)
+# distinct(strawb,State)
+
+# make a copy of Domain.Category 
+strawb %<>%
+  mutate(Chemicals=Domain.Category) %>%
+  relocate(Chemicals, .after=Domain.Category)
+
+## vector of logicals for each row with "CHEM" at 
+## the start of strawb$Chemicals
+bb <- strawb$Chemicals %>% str_detect("CHEM")
+# sum(bb)
+
+## index 
+ind_C <- (!bb)*(1:dim(strawb)[1])
+## 
+r1 <- ind_C[ind_C > 0]
+## set entries in Chemicals column to " " if they don't start with CHEM
+strawb$Chemicals[r1] <- " "
+
+
+## now we need a list of chemicals
+
+strawb %<>% separate(col = Chemicals,
+                     into = c("title", "details"),
+                     sep = ":",
+                     fill = "right")
+
+strawb %<>% mutate(details = str_extract(str_trim(details) ,"[^(].*[^)]") )
+
+strawb %<>% mutate(type = str_trim(type))
+# distinct(strawb, details)
+# distinct(strawb, type)
+
+
+strawb_chem <- strawb %>% filter((type=="FUNGICIDE")|
+                                   (type=="HERBICIDE")|
+                                   (type=="INSECTICIDE")|
+                                   (type=="OTHER"))
+
+
+
+
+####### separate details into 2 columns--only use chem to analyse
+strawb_chem %<>% separate(col = details,
+                          into = c("Pesticide", "Pesticides_code"),
+                          sep = "=",
+                          fill = "right")
+strawb_chem$Pesticide<-tolower(strawb_chem$Pesticide)
+strawb_chem$Pesticide=str_trim(strawb_chem$Pesticide)
+
+# distinct(strawb_chem,Pesticide)
+# distinct(strawb_chem,type)
+# distinct(pest_no_NA,Pesticide)
+
+# view(strawb_chem)
+# distinct(strawb_chem,dname)
+# distinct(strawb_chem,Year)
+
+
+## delete (D) in value
+strawb_chem_D <- strawb_chem[strawb_chem$Value != " (D)",]
+# view(strawb_chem_D)
+
+
+############ pest
+pest_no<-pest[!apply(pest =="", 1, all),]
+
+colnames(pest_no)[1]="Pesticide"
+pest_no$Pesticide<-tolower(pest_no$Pesticide)
+a<-pest_no %>% `$`(Pesticide) %>% unique() 
+pest_both<-filter(strawb_chem,Pesticide %in% a)
+
+
+######wrangle
+strawb_pest<-dplyr::left_join(pest_both,pest_no,by='Pesticide')
+view(head(strawb_pest))
+                                                                              
+```
+
+
+
+## EDA 
+
+Using the individual-level 
+
+```{r, echo=FALSE}
+###### delete columns
+strawb_pest_cut <- strawb_pest[,-c(1,5,6,10,12,13,17)]
+# view(strawb_pest_cut)
+# distinct(strawb_pest_cut,discription)
+
+## delete (D) in value
+strawb_pest_cut_D <- strawb_pest_cut[strawb_pest_cut$Value != " (D)",]
+# view(strawb_pest_cut_D)
+
+## delete NA Bee.Toxins 
+strawb_pest_cut_D_databee<- strawb_pest_cut_D[strawb_pest_cut_D$Bee.Toxins != "",]
+# view(strawb_pest_cut_D_databee)
+f_data<-strawb_pest_cut_D_databee
+
+# view(f_data)
+
+# distinct(f_data,State)
+# 
+# distinct(f_data,Year)
+# 
+# distinct(f_data,discription)
+# 
+# distinct(f_data,units)
+# 
+# distinct(f_data,type)
+
+##########################################
+###### EDA
+# 2019CaliforniaBee.Toxin+sum(value)
+CA_2019<- filter(f_data,f_data$Year=="2019"&f_data$State=="CALIFORNIA")#70
+CA_2018<- filter(f_data,f_data$Year=="2018"&f_data$State=="CALIFORNIA")#60
+CA_2016<- filter(f_data,f_data$Year=="2016"&f_data$State=="CALIFORNIA")#60
+
+##################EDA
+#Specific
+#1.
+all_Year<-f_data %>% group_by(Year,State) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=T))
+all_Year %>% ggplot(aes(x=Year,y=sum_value,color=State))+
+  geom_point(size=8)+
+  geom_line(linetype = "dashed",size=5)+
+  labs(x='Year',y='Value',title='Pesticide&Fungicide usage in each State through Year')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_color_manual("State",values=c("CALIFORNIA"="#7c3f43","FLORIDA"="#b67378","WASHINGTON"="#cdcdcd"))
+
+  
+all_Bee<-f_data %>% group_by(Bee.Toxins,State) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=T))
+all_Bee %>% ggplot(aes(x=Bee.Toxins,y=sum_value,fill=State))+
+  geom_bar(stat='identity',position='dodge',size=3)+
+  labs(x='Bee.Toxins',y='Value',title='Bee.Toxins vs Pesticide&Fungicide usage in each State')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#4c729b","FLORIDA"="#a2b4dc","WASHINGTON"="#8d8aa9"))
+    
+all_type<-f_data %>% group_by(type,State) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=T))
+all_type %>% ggplot(aes(x=type,y=sum_value,fill=State))+
+  geom_bar(stat='identity',size=3)+
+  labs(x='Type',y='Value',title='Type vs Pesticide&Fungicide usage in each State')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#bba19e","FLORIDA"="#d2baa9","WASHINGTON"="#b49382"))
+  
+#2.
+#2.1 Type
+Year_2019<-filter(f_data,f_data$Year=="2019")
+all_2019_Type<-Year_2019 %>% group_by(State,type) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2019_Type %>% ggplot(aes(x=type,y=sum_value,fill=State))+
+  geom_bar(stat="identity",size=3)+
+  labs(x='Type',y='Value',title='Type vs Value of each State in 2019')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+scale_fill_manual("State",values=c("CALIFORNIA"="#bba19e","FLORIDA"="#d2baa9","WASHINGTON"="#b49382"))
+
+Year_2018<-filter(f_data,f_data$Year=="2018")
+all_2018_Type<-Year_2018 %>% group_by(State,type) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2018_Type %>% ggplot(aes(x=type,y=sum_value,fill=State))+
+  geom_bar(stat="identity",size=3)+
+  labs(x='Type',y='Value',title='Type vs Value of each State in 2018')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#bba19e","FLORIDA"="#d2baa9","WASHINGTON"="#b49382"))
+
+Year_2016<-filter(f_data,f_data$Year=="2016")
+all_2016_Type<-Year_2016 %>% group_by(State,type) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2016_Type %>% ggplot(aes(x=type,y=sum_value,fill=State))+
+  geom_bar(stat="identity",size=3)+
+  labs(x='Type',y='Value',title='Type vs Value of each State in 2016')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#bba19e","FLORIDA"="#d2baa9","WASHINGTON"="#b49382"))
+
+# Bee.Toxins
+all_2019_Bee.Toxins<-Year_2019 %>% group_by(State,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2019_Bee.Toxins %>% ggplot(aes(x=Bee.Toxins,y=sum_value,fill=State))+
+  geom_bar(stat="identity",position='dodge',size=3)+
+  labs(x='Bee.Toxins',y='Value',title='Bee.Toxins vs Value of each State in 2019')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#4c729b","FLORIDA"="#a2b4dc","WASHINGTON"="#8d8aa9"))
+
+all_2018_Bee.Toxins<-Year_2018 %>% group_by(State,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2018_Bee.Toxins %>% ggplot(aes(x=Bee.Toxins,y=sum_value,fill=State))+
+  geom_bar(stat="identity",position='dodge',size=3)+
+  labs(x='Bee.Toxins',y='Value',title='Bee.Toxins vs Value of each State in 2018')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#4c729b","FLORIDA"="#a2b4dc","WASHINGTON"="#8d8aa9"))
+
+all_2016_Bee.Toxins<-Year_2016 %>% group_by(State,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+all_2016_Bee.Toxins %>% ggplot(aes(x=Bee.Toxins,y=sum_value,fill=State))+
+  geom_bar(stat="identity",position='dodge',size=3)+
+  labs(x='Bee.Toxins',y='Value',title='Bee.Toxins vs Value of each State in 2016')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("State",values=c("CALIFORNIA"="#4c729b","FLORIDA"="#a2b4dc","WASHINGTON"="#8d8aa9"))
+
+
+# insecticide????????????
+insect<-filter(f_data,f_data$type=="INSECTICIDE")
+insect_State_Year<-insect %>% group_by(Year,State) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+insect_State_Year %>% ggplot(aes(x=Year,y=sum_value,color=State))+geom_line(stat='identity',size=3)+
+  geom_point()+
+  labs(x='Year',y='Dose of Insecticide',title='Insecticide Usage in California & Florida')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+#####Pictures in shiny app
+#CA_2019
+CA_pest_sum_2019<-CA_2019 %>% group_by(Pesticide,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+# view(CA_pest_sum_2019)
+CA_pest_sum_2019 %>% ggplot(aes(x=sum_value,y=Bee.Toxins,group=Pesticide,color=Pesticide))+
+  geom_point(stat="identity",size=14)+
+  labs(x='Dose of each Pesticide',y='To Bee.Toxin',title='Pesticide Usage_Bee Toxins in 2019 California')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))
+
+CA_pest_sum_2018<-CA_2018 %>% group_by(Pesticide,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+CA_pest_sum_2018 %>% ggplot(aes(x=sum_value,y=Bee.Toxins,group=Pesticide,color=Pesticide))+
+  geom_point(stat="identity",size=14)+
+  labs(x='Pesticide',y='Dose of each Pesticide',title='Pesticide Usage in 2018 California')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))    
+
+CA_pest_sum_2016<-CA_2016 %>% group_by(Pesticide,Bee.Toxins) %>% summarise(sum_value=sum(as.numeric(Value),na.rm=TRUE))
+CA_pest_sum_2016 %>% ggplot(aes(x=sum_value,y=Bee.Toxins,group=Pesticide,color=Pesticide))+
+  geom_point(stat="identity",size=14)+
+  labs(x='Pesticide',y='Dose of each Pesticide',title='Pesticide Usage in 2016 California')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))     
+
+#Bee.Toxins count
+f_data$Bee.Toxins<-factor(f_data$Bee.Toxins)
+ggplot(data = f_data)+
+  geom_bar(mapping = aes(x = Year, fill = as.factor(Bee.Toxins)))+
+  labs(x='Year',y='Count',title='Bee.Toxins Count number In Each Year')+
+  theme(axis.text.x=element_text(color='black',size=23),
+        axis.text.y = element_text(color='black',size=25))+
+  theme(axis.title.x=element_text(size=28),axis.title.y = element_text(size=28))+
+  theme(text=element_text(family="Times New Roman",size=28))+
+  theme(text=element_text(size=28, family="Times New Roman"))+
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_manual("Bee.Toxins",values=c("slight"="#b4d9b0","moderate"="#c6c99e","high"="#b3c174"))
+
+```
+
+
+## Map
+
+```{r}
+library(ggplot2)
+library(dplyr)
+all_states <- map_data("state")  
+p <- ggplot()
+p <- p + geom_polygon( data=all_states, aes(x=long, y=lat, group = group),colour="white", fill="grey30" )
+
+
+ny <- filter(all_states, region == "new york")
+ca <- filter(all_states, region == "california")
+fl <- filter(all_states, region == "florida")
+wa <- filter(all_states, region == "washington")
+
+
+p + geom_polygon(data = all_states, aes(x=long, y=lat, group = group),fill="lightblue") +
+  geom_polygon(data = ny, aes(x=long, y=lat, group = group),fill="red") +
+  geom_polygon(data = ca, aes(x=long, y=lat, group = group),fill="blue")+
+  geom_polygon(data = fl, aes(x=long, y=lat, group = group),fill="green")+
+  geom_polygon(data = wa, aes(x=long, y=lat, group = group),fill="yellow")
+```
+
+
+## Results
+
+
+After EDA analysis and map analysis, we came to several conclusions:
+
+  * The pesticides usage decreased in 2018 in all the states, and then bounced back in 2019.
+  
+  * The types of pesticides used also decreased in 2018 in all states, and then bounced back in 2019; more bee-toxins pesticides were used in 2019 in both states. 
+  
+  * Florida’s usage of pesticides surpassed the usage in California in 2019.
+  
+
+
+## Discussion 
+
+  Before our group discussed about the results, we first clarified the harmful effects of pesticides on bees. If governments did not choose to control the use of pesticides, 41% of the insects will distinct in the next few decades. The most harmful pesticides is the neonics which have far-reaching effects on bees, birds, and other animals. The pesticides, if leak into the underground water and soil, will have build-up effects on environment that may permanently damage corp production. 
+
+	After the initial research, we tried to find out why Florida surpassed California in the usage of pesticides in 2019, based on the fact the CA still produced about 90% of the strawberries. The truth is that in 2019, US banned 12 pesticides followed by a total ban of 12 pesticides in 2020 by Environment Protect Agency(EPA). California, however, furthered the ban to include more pesticides that will harm children’s brain growth and other 5 types of neonics which harm bees greatly. One the other hand, Florida’s companies challenged the bans for pesticides in 2019 so that the usage of pesticides increased a lot. 
+	
+	Though US banned the usage for pesticides in 2019, America is still behind the world on pesticides regulation. EU expanded the ban on three types of bee-harmful pesticides in 2018. US should take more steps to protect natural pollinators.
+	
+	However, a total ban of pesticides may trigger opposing effects from pesticides companies. Governments and farmers can take some modest methods to limit the usage of pesticides and minimize the effects of pesticides on animals and people. From the website of EPA, we found several ways to achieve this:
+	
+  * Limit the time window for the usage of pesticides, especially during flower blossom.
+  
+  * Apply Integrated Pest Management plan that use cultural, mechanical, and biological pest controls together to reduce the usage of pesticides to minimum.
+  
+  * Leave a buffer area between pesticides treated areas and where wildlife may be present.
+Take care when planting treated seeds to prevent dust with pesticides that could affect bees.
+
+	In conclusion, we found that different states have different regulations on pesticides use and this will affect the usage in each states. However, US is generally behind the pesticides regulation of the world. Also, impose modest ways to control pesticides is better than a total ban of pesticides. At last, we hope that government and farmers can use less bee-harmful pesticides to protect natural pollinators.
+
+
+
