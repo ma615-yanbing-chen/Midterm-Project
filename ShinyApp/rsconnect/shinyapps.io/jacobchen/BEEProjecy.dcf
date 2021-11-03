@@ -1,0 +1,14 @@
+name: BEEProjecy
+title: BEEProjecy
+username:
+account: jacobchen
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 5030395
+bundleId: 5205444
+url: https://jacobchen.shinyapps.io/BEEProjecy/
+when: 1635910610.82989
+lastSyncTime: 1635910610.8299
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: Map.R|Newshny/app.R|www/12.jpeg
